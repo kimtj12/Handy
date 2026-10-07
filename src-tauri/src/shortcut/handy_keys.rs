@@ -86,15 +86,35 @@ pub struct FrontendKeyEvent {
 }
 
 impl HandyKeysState {
-    /// Create a new HandyKeysState
+    /// Create a new HandyKeysState. Do not report success until the manager
+    /// thread has actually constructed the native HotkeyManager; startup uses
+    /// this distinction to separate backend failure from one binding conflict.
     pub fn new(app: AppHandle) -> Result<Self, String> {
         let (cmd_tx, cmd_rx) = mpsc::channel::<ManagerCommand>();
+        let (ready_tx, ready_rx) = mpsc::channel::<Result<(), String>>();
 
-        // Start the manager thread
         let app_clone = app.clone();
-        let thread_handle = thread::spawn(move || {
-            Self::manager_thread(cmd_rx, app_clone);
-        });
+        let thread_handle = thread::Builder::new()
+            .name("handy-keys-manager".to_string())
+            .spawn(move || {
+                Self::manager_thread(cmd_rx, app_clone, ready_tx);
+            })
+            .map_err(|error| format!("Failed to start handy-keys manager thread: {}", error))?;
+
+        match ready_rx.recv() {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => {
+                let _ = thread_handle.join();
+                return Err(error);
+            }
+            Err(error) => {
+                let _ = thread_handle.join();
+                return Err(format!(
+                    "HandyKeys manager exited before initialization completed: {}",
+                    error
+                ));
+            }
+        }
 
         Ok(Self {
             command_sender: Mutex::new(cmd_tx),
@@ -107,17 +127,29 @@ impl HandyKeysState {
     }
 
     /// The main manager thread - owns the HotkeyManager and processes commands
-    fn manager_thread(cmd_rx: Receiver<ManagerCommand>, app: AppHandle) {
+    fn manager_thread(
+        cmd_rx: Receiver<ManagerCommand>,
+        app: AppHandle,
+        ready_tx: mpsc::Sender<Result<(), String>>,
+    ) {
         info!("handy-keys manager thread started");
 
-        // Create the HotkeyManager in this thread
+        // Create the HotkeyManager in this thread and report readiness before
+        // accepting registration commands.
         let manager = match HotkeyManager::new_with_blocking() {
-            Ok(m) => m,
-            Err(e) => {
-                error!("Failed to create HotkeyManager: {}", e);
+            Ok(manager) => manager,
+            Err(error) => {
+                let message = format!("Failed to create HotkeyManager: {}", error);
+                error!("{}", message);
+                let _ = ready_tx.send(Err(message));
                 return;
             }
         };
+
+        if ready_tx.send(Ok(())).is_err() {
+            debug!("HandyKeys initialization receiver dropped before manager became ready");
+            return;
+        }
 
         // Maps binding IDs to HotkeyIds and hotkey strings
         let mut binding_to_hotkey: HashMap<String, HotkeyId> = HashMap::new();
@@ -191,6 +223,18 @@ impl HandyKeysState {
         binding_id: &str,
         hotkey_string: &str,
     ) -> Result<(), String> {
+        if let Some(existing_id) = binding_to_hotkey.get(binding_id).cloned() {
+            if let Some((_, existing_hotkey)) = hotkey_to_binding.get(&existing_id) {
+                if existing_hotkey == hotkey_string {
+                    return Ok(());
+                }
+                return Err(format!(
+                    "Binding '{}' is already registered as '{}'",
+                    binding_id, existing_hotkey
+                ));
+            }
+        }
+
         let hotkey: Hotkey = hotkey_string
             .parse()
             .map_err(|e| format!("Failed to parse hotkey '{}': {}", hotkey_string, e))?;
@@ -216,10 +260,11 @@ impl HandyKeysState {
         hotkey_to_binding: &mut HashMap<HotkeyId, (String, String)>,
         binding_id: &str,
     ) -> Result<(), String> {
-        if let Some(id) = binding_to_hotkey.remove(binding_id) {
+        if let Some(id) = binding_to_hotkey.get(binding_id).cloned() {
             manager
                 .unregister(id)
                 .map_err(|e| format!("Failed to unregister hotkey: {}", e))?;
+            binding_to_hotkey.remove(binding_id);
             hotkey_to_binding.remove(&id);
             debug!("Unregistered handy-keys shortcut: {}", binding_id);
         }
@@ -421,40 +466,70 @@ pub fn validate_shortcut(raw: &str) -> Result<(), String> {
         .map_err(|e| format!("Invalid shortcut for HandyKeys: {}", e))
 }
 
-/// Initialize handy-keys shortcuts
-pub fn init_shortcuts(app: &AppHandle) -> Result<(), String> {
-    let state = HandyKeysState::new(app.clone())?;
+pub(super) enum ShortcutInitError {
+    Backend(String),
+    Binding(String),
+}
 
-    let default_bindings = settings::get_default_settings().bindings;
-    let user_settings = settings::load_or_create_app_settings(app);
+fn initialize_shortcuts_from_settings(
+    app: &AppHandle,
+    user_settings: &settings::AppSettings,
+) -> Result<(), ShortcutInitError> {
+    let state = HandyKeysState::new(app.clone()).map_err(ShortcutInitError::Backend)?;
+    let mut registered_bindings: Vec<ShortcutBinding> = Vec::new();
 
-    // Register all bindings except cancel (which is dynamic)
-    for (id, default_binding) in default_bindings {
+    for (id, binding) in &user_settings.bindings {
         if id == "cancel" {
             continue;
         }
-        // Skip post-processing shortcut when the feature is disabled
-        if id == "transcribe_with_post_process" && !user_settings.post_process_enabled {
+        if !settings::is_known_shortcut_binding(user_settings, id) {
+            continue;
+        }
+        if !settings::is_optional_shortcut_enabled(user_settings, id) {
             continue;
         }
 
-        let binding = user_settings
-            .bindings
-            .get(&id)
-            .cloned()
-            .unwrap_or(default_binding);
-
-        if let Err(e) = state.register(&binding) {
-            error!(
+        if let Err(error) = state.register(binding) {
+            let mut rollback_failures = Vec::new();
+            for registered_binding in registered_bindings.iter().rev() {
+                if let Err(rollback_error) = state.unregister(registered_binding) {
+                    rollback_failures
+                        .push(format!("{}: {}", registered_binding.id, rollback_error));
+                }
+            }
+            let mut message = format!(
                 "Failed to register handy-keys shortcut {} during init: {}",
-                id, e
+                id, error
             );
+            if !rollback_failures.is_empty() {
+                message.push_str(&format!(
+                    "; rollback incomplete: {}",
+                    rollback_failures.join("; ")
+                ));
+            }
+            return Err(ShortcutInitError::Binding(message));
         }
+        registered_bindings.push(binding.clone());
     }
 
     app.manage(state);
     info!("handy-keys shortcuts initialized");
     Ok(())
+}
+
+pub fn init_shortcuts_with_settings(
+    app: &AppHandle,
+    user_settings: &settings::AppSettings,
+) -> Result<(), String> {
+    initialize_shortcuts_from_settings(app, user_settings).map_err(|error| match error {
+        ShortcutInitError::Backend(message) | ShortcutInitError::Binding(message) => message,
+    })
+}
+
+/// Initialize handy-keys shortcuts
+pub(super) fn init_shortcuts(app: &AppHandle) -> Result<(), ShortcutInitError> {
+    let user_settings = settings::load_or_create_app_settings(app);
+    initialize_shortcuts_from_settings(app, &user_settings)
 }
 
 /// Register a shortcut
@@ -492,19 +567,29 @@ pub fn start_handy_keys_recording(app: AppHandle, binding_id: String) -> Result<
         return Err("secure-input-active".into());
     }
 
+    if crate::settings::has_active_transcription_operation(&app) {
+        return Err("Cannot record a new shortcut while transcription is recording".to_string());
+    }
+
     let state = app
         .try_state::<HandyKeysState>()
         .ok_or("HandyKeysState not initialized")?;
 
     // Suspend every registered shortcut so a combo that overlaps an existing
     // binding can't fire it (or have its keys swallowed) mid-capture.
-    super::suspend_all_shortcuts(&app);
+    super::suspend_all_shortcuts(&app)?;
 
     let result = state.start_recording(&app, binding_id);
-    if result.is_err() {
-        super::resume_all_shortcuts(&app);
+    if let Err(error) = result {
+        return match super::resume_all_shortcuts(&app) {
+            Ok(()) => Err(error),
+            Err(restore_error) => Err(format!(
+                "{}; failed to restore shortcuts after recorder start failure: {}",
+                error, restore_error
+            )),
+        };
     }
-    result
+    Ok(())
 }
 
 /// Stop key recording mode
@@ -521,9 +606,16 @@ pub fn stop_handy_keys_recording(app: AppHandle) -> Result<(), String> {
         .ok_or("HandyKeysState not initialized")?;
 
     // Restore shortcuts from settings regardless of how recording ended.
-    // A commit has already registered the new binding via change_binding;
-    // re-registering it here fails cleanly and is ignored.
-    let result = state.stop_recording();
-    super::resume_all_shortcuts(&app);
-    result
+    let stop_result = state.stop_recording();
+    let resume_result = super::resume_all_shortcuts(&app);
+
+    match (stop_result, resume_result) {
+        (Ok(()), Ok(())) => Ok(()),
+        (Err(stop_error), Ok(())) => Err(stop_error),
+        (Ok(()), Err(resume_error)) => Err(resume_error),
+        (Err(stop_error), Err(resume_error)) => Err(format!(
+            "{}; failed to restore shortcuts: {}",
+            stop_error, resume_error
+        )),
+    }
 }

@@ -5,8 +5,10 @@ use serde::{Deserialize, Deserializer, Serialize};
 use specta::Type;
 use std::collections::HashMap;
 use std::fmt;
-use tauri::AppHandle;
+use std::sync::Mutex;
+use tauri::{AppHandle, Manager};
 use tauri_plugin_store::StoreExt;
+use uuid::Uuid;
 
 pub const APPLE_INTELLIGENCE_PROVIDER_ID: &str = "apple_intelligence";
 pub const APPLE_INTELLIGENCE_DEFAULT_MODEL_ID: &str = "Apple Intelligence";
@@ -92,6 +94,114 @@ pub struct LLMPrompt {
     pub id: String,
     pub name: String,
     pub prompt: String,
+}
+
+/// A user-configurable speech-to-text preset triggered by its own global shortcut.
+/// The shortcut itself lives in `bindings` under the same `id`, so it can reuse
+/// Handy's existing shortcut editor and keyboard backends.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Type)]
+pub struct TranscriptionPreset {
+    pub id: String,
+    pub name: String,
+    pub enabled: bool,
+    /// Empty means "use the normal selected model".
+    pub model_id: String,
+    pub language: String,
+    pub translate_to_english: bool,
+    pub post_process: bool,
+    pub post_process_prompt_id: Option<String>,
+}
+
+/// Immutable settings snapshot for the recording currently owned by the
+/// transcription coordinator. Presets are resolved into a normal `AppSettings`
+/// value at recording start, then that snapshot is passed explicitly through
+/// model loading, transcription, and post-processing. No manager consults this
+/// state implicitly, so unrelated operations (history retry, CLI, etc.) can
+/// never inherit a preset.
+#[derive(Debug, Clone)]
+pub struct TranscriptionOperationConfig {
+    pub preset_id: Option<String>,
+    pub preset_name: Option<String>,
+    pub settings: AppSettings,
+    pub post_process: bool,
+}
+
+#[derive(Default)]
+struct TranscriptionOperationState {
+    active: Option<TranscriptionOperationConfig>,
+    processing_model_id: Option<String>,
+}
+
+#[derive(Default)]
+pub struct ActiveTranscriptionState(Mutex<TranscriptionOperationState>);
+
+impl ActiveTranscriptionState {
+    pub(crate) fn set(&self, config: TranscriptionOperationConfig) {
+        self.0
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .active = Some(config);
+    }
+
+    /// Move the recording snapshot into processing ownership. The model ID is
+    /// retained separately until the async pipeline finishes so model deletion
+    /// cannot invalidate the immutable operation after recording has stopped.
+    pub(crate) fn take_for_processing(&self) -> Option<TranscriptionOperationConfig> {
+        let mut state = self
+            .0
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let config = state.active.take()?;
+        state.processing_model_id = Some(config.settings.selected_model.clone());
+        Some(config)
+    }
+
+    pub(crate) fn set_processing_model(&self, model_id: String) {
+        self.0
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .processing_model_id = Some(model_id);
+    }
+
+    pub(crate) fn clear_processing_model(&self) {
+        self.0
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .processing_model_id = None;
+    }
+
+    pub(crate) fn processing_model_is(&self, model_id: &str) -> bool {
+        self.0
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .processing_model_id
+            .as_deref()
+            == Some(model_id)
+    }
+
+    pub(crate) fn clear(&self) {
+        self.0
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .active = None;
+    }
+
+    pub(crate) fn is_active(&self) -> bool {
+        self.0
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .active
+            .is_some()
+    }
+
+    pub(crate) fn preset_id(&self) -> Option<String> {
+        self.0
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .active
+            .as_ref()
+            .and_then(|config| config.preset_id.clone())
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Type)]
@@ -413,6 +523,10 @@ pub struct AppSettings {
     pub whats_new_last_seen_version: String,
     #[serde(default = "default_model")]
     pub selected_model: String,
+    /// Optional user-created hotkey-driven transcription profiles. Fresh
+    /// installs start with none; each preset keeps a stable persisted ID.
+    #[serde(default = "default_transcription_presets")]
+    pub transcription_presets: Vec<TranscriptionPreset>,
     #[serde(default)]
     pub onboarding_completed: bool,
     #[serde(default = "default_always_on_microphone")]
@@ -534,6 +648,214 @@ pub struct AppSettings {
 
 fn default_model() -> String {
     "".to_string()
+}
+
+pub const MAX_TRANSCRIPTION_PRESETS: usize = 10;
+
+fn default_transcription_presets() -> Vec<TranscriptionPreset> {
+    Vec::new()
+}
+
+/// Namespace check used by the transcription coordinator so a preset recording
+/// can still be stopped even if the preset is deleted while recording. Any
+/// command that accepts or persists a preset ID must additionally verify the ID
+/// against `has_transcription_preset`.
+pub fn is_transcription_preset_binding(id: &str) -> bool {
+    id.starts_with("preset_")
+}
+
+pub fn has_transcription_preset(settings: &AppSettings, id: &str) -> bool {
+    settings
+        .transcription_presets
+        .iter()
+        .any(|preset| preset.id == id)
+}
+
+pub fn is_transcription_preset_enabled(settings: &AppSettings, id: &str) -> bool {
+    settings
+        .transcription_presets
+        .iter()
+        .any(|preset| preset.id == id && preset.enabled)
+}
+
+pub(crate) fn normalize_preset_language_for_model(
+    requested: &str,
+    supported_languages: &[String],
+    supports_language_detection: bool,
+) -> String {
+    let requested = requested.trim();
+    let requested = if requested.is_empty() {
+        "auto"
+    } else {
+        requested
+    };
+    if supported_languages.is_empty() {
+        return requested.to_string();
+    }
+
+    let effective = crate::managers::model::effective_language(
+        requested,
+        supported_languages,
+        supports_language_detection,
+    );
+    if effective == "auto" {
+        return effective;
+    }
+
+    crate::managers::model::canonical_language_code(&effective).to_string()
+}
+
+pub(crate) fn reconcile_preset_model_capabilities(
+    preset: &mut TranscriptionPreset,
+    supported_languages: &[String],
+    supports_language_detection: bool,
+    supports_translation: bool,
+) -> bool {
+    let mut changed = false;
+    let normalized_language = normalize_preset_language_for_model(
+        &preset.language,
+        supported_languages,
+        supports_language_detection,
+    );
+    if normalized_language != preset.language {
+        preset.language = normalized_language;
+        changed = true;
+    }
+    if !supports_translation && preset.translate_to_english {
+        preset.translate_to_english = false;
+        changed = true;
+    }
+    changed
+}
+
+pub fn is_known_shortcut_binding(settings: &AppSettings, id: &str) -> bool {
+    matches!(id, "transcribe" | "transcribe_with_post_process" | "cancel")
+        || has_transcription_preset(settings, id)
+}
+
+/// Whether a known shortcut should currently be registered. Dynamic `cancel`
+/// handling remains owned by the recording lifecycle. Orphan `preset_*`
+/// bindings are never eligible even if a corrupt/hand-edited store contains one.
+pub fn is_optional_shortcut_enabled(settings: &AppSettings, id: &str) -> bool {
+    if id == "transcribe_with_post_process" {
+        return settings.post_process_enabled;
+    }
+    if let Some(preset) = settings
+        .transcription_presets
+        .iter()
+        .find(|preset| preset.id == id)
+    {
+        return preset.enabled;
+    }
+    if is_transcription_preset_binding(id) {
+        return false;
+    }
+    true
+}
+
+/// Normalize only presets that actually exist. This deliberately does not
+/// manufacture slots or enforce the creation limit on load: an existing store
+/// is never truncated. Identity repair preserves preset metadata but disables
+/// ambiguous/re-keyed entries until the user assigns a fresh shortcut.
+pub(crate) fn normalize_transcription_presets(settings: &mut AppSettings) -> bool {
+    let valid_prompt_ids: std::collections::HashSet<&str> = settings
+        .post_process_prompts
+        .iter()
+        .map(|prompt| prompt.id.as_str())
+        .collect();
+    let mut used_ids = std::collections::HashSet::new();
+    let mut changed = false;
+
+    for preset in &mut settings.transcription_presets {
+        let old_id = preset.id.clone();
+        let valid_namespace = old_id
+            .strip_prefix("preset_")
+            .is_some_and(|suffix| !suffix.is_empty());
+        let duplicate = valid_namespace && !used_ids.insert(old_id.clone());
+
+        if !valid_namespace || duplicate {
+            let new_id = loop {
+                let candidate = format!("preset_{}", Uuid::new_v4().simple());
+                if used_ids.insert(candidate.clone()) {
+                    break candidate;
+                }
+            };
+
+            // Never move a binding to a repaired identity: duplicate bindings
+            // are ambiguous, and a malformed non-preset ID could belong to a
+            // future Handy shortcut that this version does not understand. The
+            // orphan `preset_*` cleanup below removes only stale preset-namespace
+            // bindings while preserving unrelated unknown/future bindings.
+            preset.id = new_id;
+            preset.enabled = false;
+            changed = true;
+        }
+
+        let trimmed_name = preset.name.trim();
+        if trimmed_name != preset.name {
+            preset.name = trimmed_name.to_string();
+            changed = true;
+        }
+        if preset.name.is_empty() {
+            preset.name = "Preset".to_string();
+            changed = true;
+        }
+
+        let trimmed_language = preset.language.trim();
+        if trimmed_language != preset.language {
+            preset.language = trimmed_language.to_string();
+            changed = true;
+        }
+        if preset.language.is_empty() {
+            preset.language = "auto".to_string();
+            changed = true;
+        }
+
+        let prompt_is_valid = preset
+            .post_process_prompt_id
+            .as_deref()
+            .is_some_and(|id| valid_prompt_ids.contains(id));
+        if !prompt_is_valid && (preset.post_process || preset.post_process_prompt_id.is_some()) {
+            preset.post_process_prompt_id = None;
+            preset.post_process = false;
+            changed = true;
+        }
+    }
+
+    let preset_ids: std::collections::HashSet<String> = settings
+        .transcription_presets
+        .iter()
+        .map(|preset| preset.id.clone())
+        .collect();
+    let binding_count = settings.bindings.len();
+    settings
+        .bindings
+        .retain(|id, _| !is_transcription_preset_binding(id) || preset_ids.contains(id));
+    changed |= settings.bindings.len() != binding_count;
+
+    // Persisted bindings are keyed by ID, while event dispatch/bookkeeping use
+    // `ShortcutBinding.id`. Keep both representations aligned for every
+    // binding this version actually understands; leave unknown/future entries
+    // untouched for forward compatibility.
+    for (id, binding) in &mut settings.bindings {
+        let known_static = matches!(
+            id.as_str(),
+            "transcribe" | "transcribe_with_post_process" | "cancel"
+        );
+        if (known_static || preset_ids.contains(id)) && binding.id != *id {
+            binding.id = id.clone();
+            changed = true;
+        }
+    }
+
+    for preset in &mut settings.transcription_presets {
+        if preset.enabled && !settings.bindings.contains_key(&preset.id) {
+            preset.enabled = false;
+            changed = true;
+        }
+    }
+
+    changed
 }
 
 const CURRENT_SETTINGS_SCHEMA_VERSION: u32 = 2;
@@ -943,6 +1265,7 @@ pub fn get_default_settings() -> AppSettings {
         show_whats_new_on_update: default_show_whats_new_on_update(),
         whats_new_last_seen_version: default_whats_new_last_seen_version(),
         selected_model: "".to_string(),
+        transcription_presets: default_transcription_presets(),
         onboarding_completed: false,
         always_on_microphone: false,
         selected_microphone: None,
@@ -1025,6 +1348,153 @@ impl AppSettings {
     }
 }
 
+/// Resolve one enabled preset into an immutable settings snapshot. The caller
+/// owns the returned value for the lifetime of that transcription operation.
+pub fn resolve_transcription_preset(
+    settings: &AppSettings,
+    preset_id: &str,
+) -> Result<TranscriptionOperationConfig, String> {
+    let preset = settings
+        .transcription_presets
+        .iter()
+        .find(|preset| preset.id == preset_id && preset.enabled)
+        .cloned()
+        .ok_or_else(|| {
+            format!(
+                "Transcription preset '{}' is disabled or missing",
+                preset_id
+            )
+        })?;
+
+    let mut snapshot = settings.clone();
+    snapshot.selected_model = if preset.model_id.trim().is_empty() {
+        settings.selected_model.clone()
+    } else {
+        preset.model_id.clone()
+    };
+    if snapshot.selected_model.trim().is_empty() {
+        return Err(format!(
+            "Transcription preset '{}' has no model and no normal model is selected",
+            preset.name
+        ));
+    }
+    snapshot.selected_language = if preset.language.trim().is_empty() {
+        "auto".to_string()
+    } else {
+        preset.language.clone()
+    };
+    snapshot.translate_to_english = preset.translate_to_english;
+    snapshot.post_process_selected_prompt_id = preset.post_process_prompt_id.clone();
+
+    Ok(TranscriptionOperationConfig {
+        preset_id: Some(preset.id),
+        preset_name: Some(preset.name),
+        settings: snapshot,
+        // The global post-processing toggle is a master/privacy switch. A
+        // preset may remember that it wants post-processing, but execution is
+        // suppressed while the global feature is disabled.
+        post_process: preset.post_process && settings.post_process_enabled,
+    })
+}
+
+pub(crate) fn validate_preset_post_process_configuration(
+    settings: &AppSettings,
+    prompt_id: Option<&str>,
+) -> Result<(), String> {
+    let prompt_id = prompt_id
+        .filter(|id| !id.trim().is_empty())
+        .ok_or_else(|| "AI post-processing requires a prompt".to_string())?;
+    let prompt = settings
+        .post_process_prompts
+        .iter()
+        .find(|prompt| prompt.id == prompt_id)
+        .ok_or_else(|| format!("Post-processing prompt '{}' not found", prompt_id))?;
+    if prompt.prompt.trim().is_empty() {
+        return Err(format!("Post-processing prompt '{}' is empty", prompt.name));
+    }
+
+    let provider = settings
+        .active_post_process_provider()
+        .ok_or_else(|| "No AI post-processing provider is selected".to_string())?;
+    let model = settings
+        .post_process_models
+        .get(&provider.id)
+        .map(String::as_str)
+        .unwrap_or_default();
+    if model.trim().is_empty() {
+        return Err(format!(
+            "AI post-processing provider '{}' has no model selected",
+            provider.label
+        ));
+    }
+
+    Ok(())
+}
+
+pub fn persistent_transcription_operation(
+    settings: AppSettings,
+    post_process: bool,
+) -> TranscriptionOperationConfig {
+    let effective_post_process = post_process && settings.post_process_enabled;
+    TranscriptionOperationConfig {
+        preset_id: None,
+        preset_name: None,
+        settings,
+        post_process: effective_post_process,
+    }
+}
+
+pub fn set_active_transcription_operation(
+    app: &AppHandle,
+    config: TranscriptionOperationConfig,
+) -> Result<(), String> {
+    let state = app
+        .try_state::<ActiveTranscriptionState>()
+        .ok_or_else(|| "ActiveTranscriptionState is not initialized".to_string())?;
+    state.set(config);
+    Ok(())
+}
+
+pub fn take_active_transcription_operation(
+    app: &AppHandle,
+) -> Option<TranscriptionOperationConfig> {
+    app.try_state::<ActiveTranscriptionState>()
+        .and_then(|state| state.take_for_processing())
+}
+
+pub fn set_processing_transcription_model(app: &AppHandle, model_id: String) {
+    if let Some(state) = app.try_state::<ActiveTranscriptionState>() {
+        state.set_processing_model(model_id);
+    }
+}
+
+pub fn clear_processing_transcription_model(app: &AppHandle) {
+    if let Some(state) = app.try_state::<ActiveTranscriptionState>() {
+        state.clear_processing_model();
+    }
+}
+
+pub fn is_transcription_model_processing(app: &AppHandle, model_id: &str) -> bool {
+    app.try_state::<ActiveTranscriptionState>()
+        .is_some_and(|state| state.processing_model_is(model_id))
+}
+
+pub fn clear_active_transcription_operation(app: &AppHandle) {
+    if let Some(state) = app.try_state::<ActiveTranscriptionState>() {
+        state.clear();
+    }
+}
+
+pub fn has_active_transcription_operation(app: &AppHandle) -> bool {
+    app.try_state::<ActiveTranscriptionState>()
+        .is_some_and(|state| state.is_active())
+}
+
+pub fn active_transcription_preset_id(app: &AppHandle) -> Option<String> {
+    app.try_state::<ActiveTranscriptionState>()
+        .and_then(|state| state.preset_id())
+}
+
 /// Startup entry point. Same load-or-create/salvage/migrate behavior as
 /// `get_settings`; kept as a named alias for call-site clarity, plus a
 /// one-time debug dump of the loaded settings.
@@ -1075,7 +1545,9 @@ pub fn get_settings(app: &AppHandle) -> AppSettings {
         default_settings
     };
 
-    if ensure_post_process_defaults(&mut settings) {
+    let mut normalized = ensure_post_process_defaults(&mut settings);
+    normalized |= normalize_transcription_presets(&mut settings);
+    if normalized {
         store.set("settings", serde_json::to_value(&settings).unwrap());
     }
 
@@ -1253,12 +1725,6 @@ pub fn write_settings(app: &AppHandle, settings: AppSettings) {
     store.set("settings", serde_json::to_value(&settings).unwrap());
 }
 
-pub fn get_bindings(app: &AppHandle) -> HashMap<String, ShortcutBinding> {
-    let settings = get_settings(app);
-
-    settings.bindings
-}
-
 pub fn get_stored_binding(settings: &AppSettings, id: &str) -> Result<ShortcutBinding, String> {
     settings
         .bindings
@@ -1280,6 +1746,19 @@ pub fn get_recording_retention_period(app: &AppHandle) -> RecordingRetentionPeri
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn test_preset(id: &str, name: &str) -> TranscriptionPreset {
+        TranscriptionPreset {
+            id: id.to_string(),
+            name: name.to_string(),
+            enabled: false,
+            model_id: String::new(),
+            language: "auto".to_string(),
+            translate_to_english: false,
+            post_process: false,
+            post_process_prompt_id: None,
+        }
+    }
 
     #[test]
     fn stored_binding_returns_the_requested_binding() {
@@ -1318,6 +1797,277 @@ mod tests {
         assert!(settings.filler_word_removal_enabled);
         // Bindings default to empty; the load path merges the real defaults in.
         assert!(settings.bindings.is_empty());
+    }
+
+    #[test]
+    fn missing_preset_field_defaults_to_zero_presets() {
+        let settings: AppSettings = serde_json::from_value(serde_json::json!({}))
+            .expect("preset field must have a serde default");
+        assert!(settings.transcription_presets.is_empty());
+    }
+
+    #[test]
+    fn disabled_preset_shortcuts_are_not_registration_eligible() {
+        let mut settings = get_default_settings();
+        settings
+            .transcription_presets
+            .push(test_preset("preset_test", "Test"));
+
+        assert!(!is_optional_shortcut_enabled(&settings, "preset_test"));
+        assert!(is_optional_shortcut_enabled(&settings, "transcribe"));
+        assert!(!is_optional_shortcut_enabled(&settings, "preset_orphan"));
+
+        settings.transcription_presets[0].enabled = true;
+        assert!(is_optional_shortcut_enabled(&settings, "preset_test"));
+
+        settings.post_process_enabled = false;
+        assert!(!is_optional_shortcut_enabled(
+            &settings,
+            "transcribe_with_post_process"
+        ));
+    }
+
+    #[test]
+    fn preset_normalization_preserves_dynamic_entries_and_removes_orphan_binding() {
+        let mut settings = get_default_settings();
+        settings.transcription_presets = vec![TranscriptionPreset {
+            id: "preset_dynamic".to_string(),
+            name: "  ".to_string(),
+            enabled: true,
+            model_id: "model-b".to_string(),
+            language: "".to_string(),
+            translate_to_english: false,
+            post_process: true,
+            post_process_prompt_id: Some("deleted-prompt".to_string()),
+        }];
+        settings.bindings.insert(
+            "preset_orphan".to_string(),
+            ShortcutBinding {
+                id: "preset_orphan".to_string(),
+                name: "Orphan".to_string(),
+                description: "Orphan".to_string(),
+                default_binding: "ctrl+alt+9".to_string(),
+                current_binding: "ctrl+alt+9".to_string(),
+            },
+        );
+
+        assert!(normalize_transcription_presets(&mut settings));
+        assert_eq!(settings.transcription_presets.len(), 1);
+        assert_eq!(settings.transcription_presets[0].id, "preset_dynamic");
+        assert_eq!(settings.transcription_presets[0].name, "Preset");
+        assert_eq!(settings.transcription_presets[0].language, "auto");
+        assert!(!settings.transcription_presets[0].post_process);
+        assert_eq!(
+            settings.transcription_presets[0].post_process_prompt_id,
+            None
+        );
+        assert_eq!(settings.transcription_presets[0].model_id, "model-b");
+        assert!(!settings.transcription_presets[0].enabled);
+        assert!(!settings.bindings.contains_key("preset_orphan"));
+    }
+
+    #[test]
+    fn preset_normalization_repairs_invalid_and_duplicate_ids_without_touching_static_bindings() {
+        let mut settings = get_default_settings();
+        let transcribe_binding = settings.bindings.get("transcribe").cloned().unwrap();
+
+        let mut reserved = test_preset("transcribe", "Reserved");
+        reserved.enabled = true;
+        let mut first = test_preset("preset_duplicate", "First");
+        first.enabled = true;
+        let mut duplicate = test_preset("preset_duplicate", "Duplicate");
+        duplicate.enabled = true;
+        let mut empty_suffix = test_preset("preset_", "Empty suffix");
+        empty_suffix.enabled = true;
+        settings.transcription_presets = vec![reserved, first, duplicate, empty_suffix];
+        settings.bindings.insert(
+            "preset_duplicate".to_string(),
+            ShortcutBinding {
+                id: "transcribe".to_string(),
+                name: "Duplicate shortcut".to_string(),
+                description: "Duplicate shortcut".to_string(),
+                default_binding: "ctrl+alt+9".to_string(),
+                current_binding: "ctrl+alt+9".to_string(),
+            },
+        );
+
+        assert!(normalize_transcription_presets(&mut settings));
+        assert_eq!(settings.transcription_presets.len(), 4);
+        let ids = settings
+            .transcription_presets
+            .iter()
+            .map(|preset| preset.id.clone())
+            .collect::<std::collections::HashSet<_>>();
+        assert_eq!(ids.len(), 4);
+        assert!(settings
+            .transcription_presets
+            .iter()
+            .all(|preset| preset.id.starts_with("preset_") && preset.id != "preset_"));
+        assert_eq!(
+            settings.bindings["transcribe"].current_binding,
+            transcribe_binding.current_binding
+        );
+
+        let first = settings
+            .transcription_presets
+            .iter()
+            .find(|preset| preset.name == "First")
+            .unwrap();
+        assert_eq!(first.id, "preset_duplicate");
+        assert!(first.enabled);
+        assert_eq!(settings.bindings["preset_duplicate"].id, "preset_duplicate");
+        assert!(settings
+            .transcription_presets
+            .iter()
+            .filter(|preset| preset.name != "First")
+            .all(|preset| !preset.enabled));
+
+        assert!(!normalize_transcription_presets(&mut settings));
+    }
+
+    #[test]
+    fn preset_normalization_preserves_more_than_creation_limit_and_is_idempotent() {
+        let mut settings = get_default_settings();
+        settings.transcription_presets = (0..(MAX_TRANSCRIPTION_PRESETS + 2))
+            .map(|index| test_preset(&format!("preset_{index}"), &format!("Preset {index}")))
+            .collect();
+
+        assert!(!normalize_transcription_presets(&mut settings));
+        assert_eq!(
+            settings.transcription_presets.len(),
+            MAX_TRANSCRIPTION_PRESETS + 2
+        );
+        assert!(!normalize_transcription_presets(&mut settings));
+    }
+
+    #[test]
+    fn preset_resolution_snapshots_without_mutating_persistent_settings() {
+        let mut settings = get_default_settings();
+        settings.selected_model = "normal-model".to_string();
+        settings.selected_language = "en".to_string();
+
+        let mut preset_a = test_preset("preset_a", "Preset A");
+        preset_a.enabled = true;
+        preset_a.model_id = "preset-model-a".to_string();
+        preset_a.language = "nl".to_string();
+        preset_a.translate_to_english = true;
+
+        let mut preset_b = test_preset("preset_b", "Preset B");
+        preset_b.enabled = true;
+        preset_b.model_id = "preset-model-b".to_string();
+        preset_b.language = "de".to_string();
+
+        settings.transcription_presets = vec![preset_a, preset_b];
+
+        let preset_a = resolve_transcription_preset(&settings, "preset_a").unwrap();
+        assert_eq!(preset_a.settings.selected_model, "preset-model-a");
+        assert_eq!(preset_a.settings.selected_language, "nl");
+        assert!(preset_a.settings.translate_to_english);
+
+        let preset_b = resolve_transcription_preset(&settings, "preset_b").unwrap();
+        assert_eq!(preset_b.settings.selected_model, "preset-model-b");
+        assert_eq!(preset_b.settings.selected_language, "de");
+
+        assert_eq!(settings.selected_model, "normal-model");
+        assert_eq!(settings.selected_language, "en");
+        assert!(!settings.translate_to_english);
+
+        let normal = persistent_transcription_operation(settings.clone(), false);
+        assert_eq!(normal.settings.selected_model, "normal-model");
+        assert_eq!(normal.settings.selected_language, "en");
+    }
+
+    #[test]
+    fn global_post_process_switch_gates_static_post_process_operation() {
+        let mut settings = get_default_settings();
+        settings.post_process_enabled = false;
+        assert!(!persistent_transcription_operation(settings.clone(), true).post_process);
+
+        settings.post_process_enabled = true;
+        assert!(persistent_transcription_operation(settings, true).post_process);
+    }
+
+    #[test]
+    fn preset_post_process_requires_prompt_and_provider_model() {
+        let mut settings = get_default_settings();
+        let prompt_id = settings.post_process_prompts[0].id.clone();
+
+        settings.post_process_enabled = true;
+
+        assert!(validate_preset_post_process_configuration(&settings, Some(&prompt_id)).is_err());
+
+        settings.post_process_models.insert(
+            settings.post_process_provider_id.clone(),
+            "test-model".to_string(),
+        );
+        assert!(validate_preset_post_process_configuration(&settings, Some(&prompt_id)).is_ok());
+        assert!(validate_preset_post_process_configuration(&settings, None).is_err());
+    }
+
+    #[test]
+    fn global_post_process_switch_suppresses_preset_execution() {
+        let mut settings = get_default_settings();
+        settings.selected_model = "normal-model".to_string();
+        let mut preset = test_preset("preset_dynamic", "Preset");
+        preset.enabled = true;
+        preset.post_process = true;
+        settings.transcription_presets.push(preset);
+
+        settings.post_process_enabled = false;
+        assert!(
+            !resolve_transcription_preset(&settings, "preset_dynamic")
+                .unwrap()
+                .post_process
+        );
+
+        settings.post_process_enabled = true;
+        assert!(
+            resolve_transcription_preset(&settings, "preset_dynamic")
+                .unwrap()
+                .post_process
+        );
+    }
+
+    #[test]
+    fn operation_handoff_is_taken_before_processing_and_can_be_replaced() {
+        let state = ActiveTranscriptionState::default();
+        assert!(!state.is_active());
+        assert_eq!(state.preset_id(), None);
+        let mut first_settings = get_default_settings();
+        first_settings.selected_model = "preset-model-a".to_string();
+        state.set(persistent_transcription_operation(first_settings, false));
+        assert!(state.is_active());
+
+        let first = state
+            .take_for_processing()
+            .expect("recording operation should be present");
+        assert_eq!(first.settings.selected_model, "preset-model-a");
+        assert!(state.take_for_processing().is_none());
+        assert!(state.processing_model_is("preset-model-a"));
+
+        // Processing keeps the completed operation's model protected until
+        // the async finish guard releases it. Only after that can the queued
+        // recording move its own immutable snapshot into processing.
+        state.clear_processing_model();
+        assert!(!state.processing_model_is("preset-model-a"));
+
+        let mut queued_settings = get_default_settings();
+        queued_settings.selected_model = "preset-model-b".to_string();
+        state.set(persistent_transcription_operation(queued_settings, false));
+        let queued = state
+            .take_for_processing()
+            .expect("queued operation should be present");
+        assert_eq!(queued.settings.selected_model, "preset-model-b");
+        assert!(state.processing_model_is("preset-model-b"));
+        state.clear_processing_model();
+        assert!(!state.processing_model_is("preset-model-b"));
+
+        state.set(persistent_transcription_operation(
+            get_default_settings(),
+            false,
+        ));
+        state.clear();
+        assert!(state.take_for_processing().is_none());
     }
 
     /// Frozen snapshot of a real v0.9.0-era settings store, as written to

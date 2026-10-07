@@ -16,7 +16,8 @@
     "postProcessing": "Pascaproses",
     "history": "Riwayat",
     "debug": "Debug",
-    "about": "Tentang"
+    "about": "Tentang",
+    "presets": null
   },
   "onboarding": {
     "subtitle": "Untuk memulai, pilih model transkripsi",
@@ -463,6 +464,42 @@
         "createFirst": "Klik 'Buat Prompt Baru' di atas untuk membuat prompt pascaproses pertama Anda."
       }
     },
+    "presets": {
+      "title": null,
+      "description": null,
+      "useCurrentModel": null,
+      "enabled": null,
+      "enabledDescription": null,
+      "name": null,
+      "nameDescription": null,
+      "model": null,
+      "modelDescription": null,
+      "language": null,
+      "languageDescription": null,
+      "translateEnglish": null,
+      "translateEnglishDescription": null,
+      "translateUnavailable": null,
+      "postProcess": null,
+      "postProcessDescription": null,
+      "prompt": null,
+      "promptDescription": null,
+      "choosePrompt": null,
+      "promptRequired": null,
+      "saveFailed": null,
+      "createFailed": null,
+      "deleteFailed": null,
+      "addPreset": null,
+      "addShortcut": null,
+      "shortcutRequired": null,
+      "shortcutDescription": null,
+      "emptyTitle": null,
+      "emptyDescription": null,
+      "limitReached": null,
+      "deletePreset": null,
+      "deleteDescription": null,
+      "deleteConfirm": null,
+      "postProcessGlobalDisabled": null
+    },
     "history": {
       "title": "Riwayat",
       "openFolder": "Buka Folder Rekaman",
@@ -477,7 +514,8 @@
       "retranscribe": "Transkripsikan ulang",
       "retranscribeError": "Gagal mentranskripsikan ulang. Silakan coba lagi.",
       "transcribing": "Mentranskripsikan...",
-      "transcriptionFailed": "Transkripsi gagal. Anda dapat mentranskripsikan ulang menggunakan ikon coba lagi."
+      "transcriptionFailed": "Transkripsi gagal. Anda dapat mentranskripsikan ulang menggunakan ikon coba lagi.",
+      "retranscribeCurrentSettings": null
     },
     "debug": {
       "title": "Debug",
@@ -672,6 +710,7 @@
     "open": "Buka",
     "copy": "Salin",
     "clear": "Bersihkan",
+    "retry": null,
     "noOptionsFound": "Tidak ada opsi yang ditemukan"
   },
   "accessibility": {
@@ -679,6 +718,7 @@
     "openSettings": "Buka Pengaturan Sistem"
   },
   "errors": {
+    "shortcutInitializationFailed": null,
     "loadDirectory": "Kesalahan saat memuat direktori: {{error}}",
     "micPermissionDeniedTitle": "Akses Mikrofon Ditolak",
     "micPermissionDenied": {

@@ -16,7 +16,8 @@
     "history": "السجل",
     "debug": "تصحيح الأخطاء",
     "about": "حول",
-    "models": "النماذج"
+    "models": "النماذج",
+    "presets": null
   },
   "onboarding": {
     "subtitle": "للبدء، اختر نموذج التفريغ الصوتي",
@@ -440,6 +441,42 @@
         "createFirst": ".انقر على 'إنشاء مطالبة جديدة' أعلاه لإنشاء أول مطالبة معالجة لاحقة لك"
       }
     },
+    "presets": {
+      "title": null,
+      "description": null,
+      "useCurrentModel": null,
+      "enabled": null,
+      "enabledDescription": null,
+      "name": null,
+      "nameDescription": null,
+      "model": null,
+      "modelDescription": null,
+      "language": null,
+      "languageDescription": null,
+      "translateEnglish": null,
+      "translateEnglishDescription": null,
+      "translateUnavailable": null,
+      "postProcess": null,
+      "postProcessDescription": null,
+      "prompt": null,
+      "promptDescription": null,
+      "choosePrompt": null,
+      "promptRequired": null,
+      "saveFailed": null,
+      "createFailed": null,
+      "deleteFailed": null,
+      "addPreset": null,
+      "addShortcut": null,
+      "shortcutRequired": null,
+      "shortcutDescription": null,
+      "emptyTitle": null,
+      "emptyDescription": null,
+      "limitReached": null,
+      "deletePreset": null,
+      "deleteDescription": null,
+      "deleteConfirm": null,
+      "postProcessGlobalDisabled": null
+    },
     "history": {
       "title": "السجل",
       "openFolder": "فتح مجلد التسجيلات",
@@ -454,7 +491,8 @@
       "retranscribe": "إعادة النسخ",
       "retranscribeError": "فشلت إعادة النسخ. يرجى المحاولة مرة أخرى.",
       "transcribing": "جارٍ النسخ...",
-      "transcriptionFailed": "فشل النسخ. يمكنك إعادة النسخ باستخدام أيقونة إعادة المحاولة."
+      "transcriptionFailed": "فشل النسخ. يمكنك إعادة النسخ باستخدام أيقونة إعادة المحاولة.",
+      "retranscribeCurrentSettings": null
     },
     "debug": {
       "title": "تصحيح الأخطاء",
@@ -669,6 +707,7 @@
     "open": "فتح",
     "copy": "نسخ",
     "clear": "مسح",
+    "retry": null,
     "noOptionsFound": "لم يتم العثور على خيارات"
   },
   "accessibility": {
@@ -676,6 +715,7 @@
     "openSettings": "فتح إعدادات النظام"
   },
   "errors": {
+    "shortcutInitializationFailed": null,
     "loadDirectory": "خطأ في تحميل المجلد: {{error}}",
     "micPermissionDeniedTitle": "تم رفض الوصول إلى الميكروفون",
     "micPermissionDenied": {

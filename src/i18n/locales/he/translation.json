@@ -16,7 +16,8 @@
     "postProcessing": "עיבוד משלים",
     "history": "היסטוריה",
     "debug": "ניפוי שגיאות",
-    "about": "אודות"
+    "about": "אודות",
+    "presets": null
   },
   "onboarding": {
     "subtitle": "כדי להתחיל, בחר מודל תמלול",
@@ -463,6 +464,42 @@
         "createFirst": "לחץ על 'צור פרומפט חדש' למעלה כדי ליצור את פרומפט העיבוד הראשון שלך."
       }
     },
+    "presets": {
+      "title": null,
+      "description": null,
+      "useCurrentModel": null,
+      "enabled": null,
+      "enabledDescription": null,
+      "name": null,
+      "nameDescription": null,
+      "model": null,
+      "modelDescription": null,
+      "language": null,
+      "languageDescription": null,
+      "translateEnglish": null,
+      "translateEnglishDescription": null,
+      "translateUnavailable": null,
+      "postProcess": null,
+      "postProcessDescription": null,
+      "prompt": null,
+      "promptDescription": null,
+      "choosePrompt": null,
+      "promptRequired": null,
+      "saveFailed": null,
+      "createFailed": null,
+      "deleteFailed": null,
+      "addPreset": null,
+      "addShortcut": null,
+      "shortcutRequired": null,
+      "shortcutDescription": null,
+      "emptyTitle": null,
+      "emptyDescription": null,
+      "limitReached": null,
+      "deletePreset": null,
+      "deleteDescription": null,
+      "deleteConfirm": null,
+      "postProcessGlobalDisabled": null
+    },
     "history": {
       "title": "היסטוריה",
       "openFolder": "פתח את תיקיית ההקלטות",
@@ -477,7 +514,8 @@
       "retranscribe": "תמלל מחדש",
       "retranscribeError": "תמלול מחדש נכשל. נסה שוב.",
       "transcribing": "מתמלל...",
-      "transcriptionFailed": "התמלול נכשל. אפשר לתמלל מחדש באמצעות אייקון הניסיון החוזר."
+      "transcriptionFailed": "התמלול נכשל. אפשר לתמלל מחדש באמצעות אייקון הניסיון החוזר.",
+      "retranscribeCurrentSettings": null
     },
     "debug": {
       "title": "ניפוי שגיאות",
@@ -669,6 +707,7 @@
     "open": "פתח",
     "copy": "העתק",
     "clear": "נקה",
+    "retry": null,
     "noOptionsFound": "לא נמצאו אפשרויות"
   },
   "accessibility": {
@@ -676,6 +715,7 @@
     "openSettings": "פתח את הגדרות המערכת"
   },
   "errors": {
+    "shortcutInitializationFailed": null,
     "loadDirectory": "שגיאה בטעינת תיקייה: {{error}}",
     "micPermissionDeniedTitle": "הגישה למיקרופון נדחתה",
     "micPermissionDenied": {

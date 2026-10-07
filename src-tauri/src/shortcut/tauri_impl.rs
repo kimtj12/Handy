@@ -11,30 +11,49 @@ use crate::settings::{self, ShortcutBinding};
 
 use super::handler::handle_shortcut_event;
 
-/// Initialize shortcuts using Tauri's global-shortcut plugin
-pub fn init_shortcuts(app: &AppHandle) {
-    let default_bindings = settings::get_default_settings().bindings;
+/// Initialize shortcuts using Tauri's global-shortcut plugin. Startup is
+/// transactional: a partial native registration set is rolled back and the
+/// caller is told initialization did not complete.
+pub fn init_shortcuts(app: &AppHandle) -> Result<(), String> {
     let user_settings = settings::load_or_create_app_settings(app);
+    let mut registered: Vec<ShortcutBinding> = Vec::new();
 
-    // Register all default shortcuts, applying user customizations
-    for (id, default_binding) in default_bindings {
+    for (id, binding) in &user_settings.bindings {
         if id == "cancel" {
-            continue; // Skip cancel shortcut, it will be registered dynamically
-        }
-        // Skip post-processing shortcut when the feature is disabled
-        if id == "transcribe_with_post_process" && !user_settings.post_process_enabled {
             continue;
         }
-        let binding = user_settings
-            .bindings
-            .get(&id)
-            .cloned()
-            .unwrap_or(default_binding);
-
-        if let Err(e) = register_shortcut(app, binding) {
-            error!("Failed to register shortcut {} during init: {}", id, e);
+        if !settings::is_known_shortcut_binding(&user_settings, id) {
+            continue;
         }
+        if !settings::is_optional_shortcut_enabled(&user_settings, id) {
+            continue;
+        }
+
+        if let Err(error) = register_shortcut(app, binding.clone()) {
+            let mut rollback_failures = Vec::new();
+            for registered_binding in registered.iter().rev() {
+                if let Err(rollback_error) = unregister_shortcut(app, registered_binding.clone()) {
+                    rollback_failures
+                        .push(format!("{}: {}", registered_binding.id, rollback_error));
+                }
+            }
+
+            let mut message = format!(
+                "Failed to register Tauri shortcut {} during init: {}",
+                id, error
+            );
+            if !rollback_failures.is_empty() {
+                message.push_str(&format!(
+                    "; rollback incomplete: {}",
+                    rollback_failures.join("; ")
+                ));
+            }
+            return Err(message);
+        }
+        registered.push(binding.clone());
     }
+
+    Ok(())
 }
 
 /// Validate a shortcut string for the Tauri global-shortcut implementation.
@@ -139,6 +158,22 @@ pub fn register_shortcut(app: &AppHandle, binding: ShortcutBinding) -> Result<()
     Ok(())
 }
 
+/// Ensure a shortcut is registered, treating an already-present app
+/// registration as success. This is used when restoring bindings after
+/// shortcut capture, where the just-committed binding may already be live.
+pub fn ensure_shortcut_registered(app: &AppHandle, binding: ShortcutBinding) -> Result<(), String> {
+    let shortcut = binding.current_binding.parse::<Shortcut>().map_err(|e| {
+        format!(
+            "Failed to parse shortcut '{}' while restoring: {}",
+            binding.current_binding, e
+        )
+    })?;
+    if app.global_shortcut().is_registered(shortcut) {
+        return Ok(());
+    }
+    register_shortcut(app, binding)
+}
+
 /// Unregister a shortcut from Tauri's global-shortcut plugin
 pub fn unregister_shortcut(app: &AppHandle, binding: ShortcutBinding) -> Result<(), String> {
     let shortcut = match binding.current_binding.parse::<Shortcut>() {
@@ -152,6 +187,14 @@ pub fn unregister_shortcut(app: &AppHandle, binding: ShortcutBinding) -> Result<
             return Err(error_msg);
         }
     };
+
+    // Shortcut capture suspends registrations before `change_binding` runs.
+    // Treat an already-absent app registration as successfully unregistered,
+    // while still propagating a real native teardown failure for a binding
+    // that is currently registered.
+    if !app.global_shortcut().is_registered(shortcut) {
+        return Ok(());
+    }
 
     app.global_shortcut().unregister(shortcut).map_err(|e| {
         let error_msg = format!(

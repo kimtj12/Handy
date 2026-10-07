@@ -16,7 +16,8 @@
     "postProcessing": "Постобробка",
     "history": "Історія",
     "debug": "Дебаг",
-    "about": "Інфо"
+    "about": "Інфо",
+    "presets": null
   },
   "onboarding": {
     "subtitle": "Для початку оберіть модель транскрипції",
@@ -463,6 +464,42 @@
         "createFirst": "Натисніть «Створити новий промпт» вище, щоб створити ваш перший промпт постобробки."
       }
     },
+    "presets": {
+      "title": null,
+      "description": null,
+      "useCurrentModel": null,
+      "enabled": null,
+      "enabledDescription": null,
+      "name": null,
+      "nameDescription": null,
+      "model": null,
+      "modelDescription": null,
+      "language": null,
+      "languageDescription": null,
+      "translateEnglish": null,
+      "translateEnglishDescription": null,
+      "translateUnavailable": null,
+      "postProcess": null,
+      "postProcessDescription": null,
+      "prompt": null,
+      "promptDescription": null,
+      "choosePrompt": null,
+      "promptRequired": null,
+      "saveFailed": null,
+      "createFailed": null,
+      "deleteFailed": null,
+      "addPreset": null,
+      "addShortcut": null,
+      "shortcutRequired": null,
+      "shortcutDescription": null,
+      "emptyTitle": null,
+      "emptyDescription": null,
+      "limitReached": null,
+      "deletePreset": null,
+      "deleteDescription": null,
+      "deleteConfirm": null,
+      "postProcessGlobalDisabled": null
+    },
     "history": {
       "title": "Історія",
       "openFolder": "Відкрити папку записів",
@@ -477,7 +514,8 @@
       "retranscribe": "Перетранскрибувати",
       "retranscribeError": "Не вдалося перетранскрибувати. Будь ласка, спробуйте ще раз.",
       "transcribing": "Транскрибування...",
-      "transcriptionFailed": "Транскрипція не вдалася. Ви можете перетранскрибувати за допомогою іконки повтору."
+      "transcriptionFailed": "Транскрипція не вдалася. Ви можете перетранскрибувати за допомогою іконки повтору.",
+      "retranscribeCurrentSettings": null
     },
     "debug": {
       "title": "Дебаг",
@@ -669,6 +707,7 @@
     "open": "Відкрити",
     "copy": "Копіювати",
     "clear": "Очистити",
+    "retry": null,
     "noOptionsFound": "Опцій не знайдено"
   },
   "accessibility": {
@@ -676,6 +715,7 @@
     "openSettings": "Відкрити Системні налаштування"
   },
   "errors": {
+    "shortcutInitializationFailed": null,
     "loadDirectory": "Помилка завантаження папки: {{error}}",
     "micPermissionDeniedTitle": "Доступ до мікрофона заборонено",
     "micPermissionDenied": {

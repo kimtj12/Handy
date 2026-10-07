@@ -155,8 +155,15 @@ const settingUpdaters: {
   auto_submit_key: (value) =>
     commands.changeAutoSubmitKeySetting(value as string),
   history_limit: (value) => commands.updateHistoryLimit(value as number),
-  post_process_enabled: (value) =>
-    commands.changePostProcessEnabledSetting(value as boolean),
+  post_process_enabled: async (value) => {
+    const result = await commands.changePostProcessEnabledSetting(
+      value as boolean,
+    );
+    if (result.status === "error") {
+      toast.error(result.error);
+      throw new Error(result.error);
+    }
+  },
   post_process_selected_prompt_id: (value) =>
     commands.setPostProcessSelectedPrompt(value as string),
   mute_while_recording: (value) =>
@@ -355,64 +362,27 @@ export const useSettingsStore = create<SettingsStore>()(
       }
     },
 
-    // Update a specific binding
+    // Update a specific binding. The backend response is authoritative so
+    // first-time dynamic preset bindings can be created without fabricating a
+    // partial ShortcutBinding in frontend state.
     updateBinding: async (id, binding) => {
-      const { settings, setUpdating } = get();
+      const { setUpdating, refreshSettings } = get();
       const updateKey = `binding_${id}`;
-      const originalBinding = settings?.bindings?.[id]?.current_binding;
 
       setUpdating(updateKey, true);
 
       try {
-        // Optimistic update
-        set((state) => ({
-          settings: state.settings
-            ? {
-                ...state.settings,
-                bindings: {
-                  ...state.settings.bindings,
-                  [id]: {
-                    ...state.settings.bindings?.[id]!,
-                    current_binding: binding,
-                  },
-                },
-              }
-            : null,
-        }));
-
         const result = await commands.changeBinding(id, binding);
-
-        // Check if the command executed successfully
         if (result.status === "error") {
           throw new Error(result.error);
         }
-
-        // Check if the binding change was successful
         if (!result.data.success) {
           throw new Error(result.data.error || "Failed to update binding");
         }
+        await refreshSettings();
       } catch (error) {
         console.error(`Failed to update binding ${id}:`, error);
-
-        // Rollback on error
-        if (originalBinding && get().settings) {
-          set((state) => ({
-            settings: state.settings
-              ? {
-                  ...state.settings,
-                  bindings: {
-                    ...state.settings.bindings,
-                    [id]: {
-                      ...state.settings.bindings?.[id]!,
-                      current_binding: originalBinding,
-                    },
-                  },
-                }
-              : null,
-          }));
-        }
-
-        // Re-throw to let the caller know it failed
+        await refreshSettings().catch(console.error);
         throw error;
       } finally {
         setUpdating(updateKey, false);
@@ -427,7 +397,13 @@ export const useSettingsStore = create<SettingsStore>()(
       setUpdating(updateKey, true);
 
       try {
-        await commands.resetBinding(id);
+        const result = await commands.resetBinding(id);
+        if (result.status === "error") {
+          throw new Error(String(result.error));
+        }
+        if (!result.data.success) {
+          throw new Error(result.data.error ?? "Failed to reset binding");
+        }
         await refreshSettings();
       } catch (error) {
         console.error(`Failed to reset binding ${id}:`, error);
@@ -461,7 +437,10 @@ export const useSettingsStore = create<SettingsStore>()(
       setPostProcessModelOptions(providerId, []);
 
       try {
-        await commands.setPostProcessProvider(providerId);
+        const result = await commands.setPostProcessProvider(providerId);
+        if (result.status === "error") {
+          throw new Error(result.error);
+        }
         await refreshSettings();
       } catch (error) {
         console.error("Failed to set post-process provider:", error);
@@ -489,12 +468,15 @@ export const useSettingsStore = create<SettingsStore>()(
       setUpdating(updateKey, true);
 
       try {
-        if (settingType === "base_url") {
-          await commands.changePostProcessBaseUrlSetting(providerId, value);
-        } else if (settingType === "api_key") {
-          await commands.changePostProcessApiKeySetting(providerId, value);
-        } else if (settingType === "model") {
-          await commands.changePostProcessModelSetting(providerId, value);
+        const result =
+          settingType === "base_url"
+            ? await commands.changePostProcessBaseUrlSetting(providerId, value)
+            : settingType === "api_key"
+              ? await commands.changePostProcessApiKeySetting(providerId, value)
+              : await commands.changePostProcessModelSetting(providerId, value);
+
+        if (result.status === "error") {
+          throw new Error(result.error);
         }
         await refreshSettings();
       } catch (error) {

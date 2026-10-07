@@ -6,10 +6,12 @@ import {
   normalizeKey,
 } from "../../lib/utils/keyboard";
 import { ResetButton } from "../ui/ResetButton";
+import { Button } from "../ui/Button";
 import { SettingContainer } from "../ui/SettingContainer";
 import { useSettings } from "../../hooks/useSettings";
 import { useOsType } from "../../hooks/useOsType";
 import { commands } from "@/bindings";
+import { listen } from "@tauri-apps/api/event";
 import { toast } from "sonner";
 
 interface GlobalShortcutInputProps {
@@ -17,6 +19,9 @@ interface GlobalShortcutInputProps {
   grouped?: boolean;
   shortcutId: string;
   disabled?: boolean;
+  allowCreate?: boolean;
+  title?: string;
+  description?: string;
 }
 
 export const GlobalShortcutInput: React.FC<GlobalShortcutInputProps> = ({
@@ -24,6 +29,9 @@ export const GlobalShortcutInput: React.FC<GlobalShortcutInputProps> = ({
   grouped = false,
   shortcutId,
   disabled = false,
+  allowCreate = false,
+  title,
+  description,
 }) => {
   const { t } = useTranslation();
   const { getSetting, updateBinding, resetBinding, isUpdating, isLoading } =
@@ -38,6 +46,48 @@ export const GlobalShortcutInput: React.FC<GlobalShortcutInputProps> = ({
   const osType = useOsType();
 
   const bindings = getSetting("bindings") || {};
+
+  // The native close handler hides rather than destroys the main window.
+  // Backend cleanup runs before hide; mirror that cancellation locally so a
+  // reopened settings window never remains in shortcut-capture mode.
+  useEffect(() => {
+    let active = true;
+    let unlistenCancelled: (() => void) | null = null;
+    let unlistenFailed: (() => void) | null = null;
+
+    listen("shortcut-capture-cancelled", () => {
+      setEditingShortcutId(null);
+      setKeyPressed([]);
+      setRecordedKeys([]);
+      setOriginalBinding("");
+    }).then((stopListening) => {
+      if (active) {
+        unlistenCancelled = stopListening;
+      } else {
+        stopListening();
+      }
+    });
+
+    listen<string>("shortcut-capture-cancel-failed", (event) => {
+      console.error(
+        "Failed to restore shortcuts before hiding Settings:",
+        event.payload,
+      );
+      toast.error(t("settings.general.shortcut.errors.restore"));
+    }).then((stopListening) => {
+      if (active) {
+        unlistenFailed = stopListening;
+      } else {
+        stopListening();
+      }
+    });
+
+    return () => {
+      active = false;
+      unlistenCancelled?.();
+      unlistenFailed?.();
+    };
+  }, [t]);
 
   useEffect(() => {
     // Only add event listeners when we're in editing mode
@@ -102,7 +152,7 @@ export const GlobalShortcutInput: React.FC<GlobalShortcutInputProps> = ({
         });
         const newShortcut = sortedKeys.join("+");
 
-        if (editingShortcutId && bindings[editingShortcutId]) {
+        if (editingShortcutId) {
           try {
             await updateBinding(editingShortcutId, newShortcut);
           } catch (error) {
@@ -124,9 +174,11 @@ export const GlobalShortcutInput: React.FC<GlobalShortcutInputProps> = ({
             }
           }
 
-          // Re-register all bindings (the one just committed is already
-          // registered; re-registering it fails cleanly and is ignored)
-          await commands.resumeAllBindings().catch(console.error);
+          const resumeResult = await commands.resumeAllBindings();
+          if (resumeResult.status === "error") {
+            console.error("Failed to restore shortcuts:", resumeResult.error);
+            toast.error(t("settings.general.shortcut.errors.restore"));
+          }
 
           // Exit editing mode and reset states
           setEditingShortcutId(null);
@@ -151,7 +203,11 @@ export const GlobalShortcutInput: React.FC<GlobalShortcutInputProps> = ({
             toast.error(t("settings.general.shortcut.errors.restore"));
           }
         }
-        await commands.resumeAllBindings().catch(console.error);
+        const resumeResult = await commands.resumeAllBindings();
+        if (resumeResult.status === "error") {
+          console.error("Failed to restore shortcuts:", resumeResult.error);
+          toast.error(t("settings.general.shortcut.errors.restore"));
+        }
         setEditingShortcutId(null);
         setKeyPressed([]);
         setRecordedKeys([]);
@@ -184,8 +240,26 @@ export const GlobalShortcutInput: React.FC<GlobalShortcutInputProps> = ({
     if (editingShortcutId === id) return; // Already editing this shortcut
 
     // Suspend all bindings so no shortcut fires (or swallows the
-    // keystrokes) while keys are being recorded
-    await commands.suspendAllBindings().catch(console.error);
+    // keystrokes) while keys are being recorded. The backend refuses while a
+    // transcription is actively recording so its stop/release shortcut cannot
+    // be removed underneath the coordinator.
+    try {
+      const result = await commands.suspendAllBindings();
+      if (result.status === "error") {
+        toast.error(
+          t("settings.general.shortcut.errors.set", {
+            error: String(result.error),
+          }),
+        );
+        return;
+      }
+    } catch (error) {
+      console.error("Failed to suspend bindings:", error);
+      toast.error(
+        t("settings.general.shortcut.errors.set", { error: String(error) }),
+      );
+      return;
+    }
 
     // Store the original binding to restore if canceled
     setOriginalBinding(bindings[id]?.current_binding || "");
@@ -212,8 +286,8 @@ export const GlobalShortcutInput: React.FC<GlobalShortcutInputProps> = ({
   if (isLoading) {
     return (
       <SettingContainer
-        title={t("settings.general.shortcut.title")}
-        description={t("settings.general.shortcut.description")}
+        title={title ?? t("settings.general.shortcut.title")}
+        description={description ?? t("settings.general.shortcut.description")}
         descriptionMode={descriptionMode}
         grouped={grouped}
       >
@@ -228,8 +302,8 @@ export const GlobalShortcutInput: React.FC<GlobalShortcutInputProps> = ({
   if (Object.keys(bindings).length === 0) {
     return (
       <SettingContainer
-        title={t("settings.general.shortcut.title")}
-        description={t("settings.general.shortcut.description")}
+        title={title ?? t("settings.general.shortcut.title")}
+        description={description ?? t("settings.general.shortcut.description")}
         descriptionMode={descriptionMode}
         grouped={grouped}
       >
@@ -241,11 +315,40 @@ export const GlobalShortcutInput: React.FC<GlobalShortcutInputProps> = ({
   }
 
   const binding = bindings[shortcutId];
+  if (!binding && allowCreate) {
+    return (
+      <SettingContainer
+        title={title ?? t("settings.general.shortcut.title")}
+        description={description ?? t("settings.presets.shortcutRequired")}
+        descriptionMode={descriptionMode}
+        grouped={grouped}
+        disabled={disabled}
+      >
+        {editingShortcutId === shortcutId ? (
+          <div
+            ref={(ref) => setShortcutRef(shortcutId, ref)}
+            className="px-2 py-1 text-sm font-semibold border border-logo-primary bg-logo-primary/30 rounded-md"
+          >
+            {formatCurrentKeys()}
+          </div>
+        ) : (
+          <Button
+            size="sm"
+            variant="secondary"
+            onClick={() => startRecording(shortcutId)}
+            disabled={disabled}
+          >
+            {t("settings.presets.addShortcut")}
+          </Button>
+        )}
+      </SettingContainer>
+    );
+  }
   if (!binding) {
     return (
       <SettingContainer
-        title={t("settings.general.shortcut.title")}
-        description={t("settings.general.shortcut.notFound")}
+        title={title ?? t("settings.general.shortcut.title")}
+        description={description ?? t("settings.general.shortcut.notFound")}
         descriptionMode={descriptionMode}
         grouped={grouped}
       >
@@ -257,14 +360,15 @@ export const GlobalShortcutInput: React.FC<GlobalShortcutInputProps> = ({
   }
 
   // Get translated name and description for the binding
-  const translatedName = t(
-    `settings.general.shortcut.bindings.${shortcutId}.name`,
-    binding.name,
-  );
-  const translatedDescription = t(
-    `settings.general.shortcut.bindings.${shortcutId}.description`,
-    binding.description,
-  );
+  const translatedName =
+    title ??
+    t(`settings.general.shortcut.bindings.${shortcutId}.name`, binding.name);
+  const translatedDescription =
+    description ??
+    t(
+      `settings.general.shortcut.bindings.${shortcutId}.description`,
+      binding.description,
+    );
 
   return (
     <SettingContainer

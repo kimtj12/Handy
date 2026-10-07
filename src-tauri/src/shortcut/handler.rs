@@ -7,7 +7,7 @@ use log::warn;
 use std::sync::Arc;
 use tauri::{AppHandle, Manager};
 
-use crate::actions::ACTION_MAP;
+use crate::actions::resolve_action;
 use crate::managers::audio::AudioRecordingManager;
 use crate::settings::get_settings;
 use crate::transcription_coordinator::is_transcribe_binding;
@@ -34,6 +34,14 @@ pub fn handle_shortcut_event(
 ) {
     let settings = get_settings(app);
 
+    // A stale native registration must never bypass the global AI
+    // post-processing master/privacy switch. This also protects against rare
+    // teardown failures where the OS still delivers the old shortcut.
+    if binding_id == "transcribe_with_post_process" && !settings.post_process_enabled {
+        warn!("Ignoring disabled post-processing shortcut event");
+        return;
+    }
+
     // Transcribe bindings are handled by the coordinator.
     if is_transcribe_binding(binding_id) {
         if let Some(coordinator) = app.try_state::<TranscriptionCoordinator>() {
@@ -50,7 +58,7 @@ pub fn handle_shortcut_event(
         return;
     }
 
-    let Some(action) = ACTION_MAP.get(binding_id) else {
+    let Some(action) = resolve_action(binding_id) else {
         warn!(
             "No action defined in ACTION_MAP for shortcut ID '{}'. Shortcut: '{}', Pressed: {}",
             binding_id, hotkey_string, is_pressed

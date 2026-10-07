@@ -16,7 +16,8 @@
     "postProcessing": "Постобработка",
     "history": "История",
     "debug": "Отладка",
-    "about": "О программе"
+    "about": "О программе",
+    "presets": null
   },
   "onboarding": {
     "subtitle": "Для начала выберите модель транскрипции",
@@ -463,6 +464,42 @@
         "createFirst": "Нажмите «Создать новый запрос» выше, чтобы создать первый запрос для постобработки."
       }
     },
+    "presets": {
+      "title": null,
+      "description": null,
+      "useCurrentModel": null,
+      "enabled": null,
+      "enabledDescription": null,
+      "name": null,
+      "nameDescription": null,
+      "model": null,
+      "modelDescription": null,
+      "language": null,
+      "languageDescription": null,
+      "translateEnglish": null,
+      "translateEnglishDescription": null,
+      "translateUnavailable": null,
+      "postProcess": null,
+      "postProcessDescription": null,
+      "prompt": null,
+      "promptDescription": null,
+      "choosePrompt": null,
+      "promptRequired": null,
+      "saveFailed": null,
+      "createFailed": null,
+      "deleteFailed": null,
+      "addPreset": null,
+      "addShortcut": null,
+      "shortcutRequired": null,
+      "shortcutDescription": null,
+      "emptyTitle": null,
+      "emptyDescription": null,
+      "limitReached": null,
+      "deletePreset": null,
+      "deleteDescription": null,
+      "deleteConfirm": null,
+      "postProcessGlobalDisabled": null
+    },
     "history": {
       "title": "История",
       "openFolder": "Открыть папку с записями",
@@ -477,7 +514,8 @@
       "retranscribe": "Перетранскрибировать",
       "retranscribeError": "Не удалось перетранскрибировать. Пожалуйста, попробуйте снова.",
       "transcribing": "Транскрибирование...",
-      "transcriptionFailed": "Транскрипция не удалась. Вы можете перетранскрибировать, используя значок повтора."
+      "transcriptionFailed": "Транскрипция не удалась. Вы можете перетранскрибировать, используя значок повтора.",
+      "retranscribeCurrentSettings": null
     },
     "debug": {
       "title": "Отлаживать",
@@ -669,6 +707,7 @@
     "open": "Открыть",
     "copy": "Копировать",
     "clear": "Очистить",
+    "retry": null,
     "noOptionsFound": "Вариантов не найдено"
   },
   "accessibility": {
@@ -676,6 +715,7 @@
     "openSettings": "Открыть настройки системы"
   },
   "errors": {
+    "shortcutInitializationFailed": null,
     "loadDirectory": "Ошибка загрузки каталога: {{error}}.",
     "micPermissionDeniedTitle": "Доступ к микрофону запрещён",
     "micPermissionDenied": {

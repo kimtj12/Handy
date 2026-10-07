@@ -653,6 +653,9 @@ pub fn run(cli_args: CliArgs) {
         .commands(collect_commands![
             shortcut::change_binding,
             shortcut::reset_binding,
+            shortcut::create_transcription_preset,
+            shortcut::delete_transcription_preset,
+            shortcut::update_transcription_preset,
             shortcut::change_shortcut_activation_setting,
             shortcut::change_hold_threshold_ms_setting,
             shortcut::change_audio_feedback_setting,
@@ -1009,6 +1012,7 @@ pub fn run(cli_args: CliArgs) {
             WEBVIEW_LOG_STREAMING.store(settings.debug_mode, Ordering::Relaxed);
             let app_handle = app.handle().clone();
             app.manage(TranscriptionCoordinator::new(app_handle.clone()));
+            app.manage(settings::ActiveTranscriptionState::default());
 
             initialize_core_logic(&app_handle);
 
@@ -1065,23 +1069,34 @@ pub fn run(cli_args: CliArgs) {
         .on_window_event(|window, event| match event {
             tauri::WindowEvent::CloseRequested { api, .. } => {
                 api.prevent_close();
-                let _res = window.hide();
-
-                #[cfg(target_os = "macos")]
+                match crate::shortcut::cancel_shortcut_capture_for_window_hide(window.app_handle())
                 {
-                    let settings = get_settings(window.app_handle());
-                    let tray_visible =
-                        settings.show_tray_icon && !window.app_handle().state::<CliArgs>().no_tray;
-                    if tray_visible {
-                        // Tray is available: hide the dock icon, app lives in the tray
-                        let res = window
-                            .app_handle()
-                            .set_activation_policy(tauri::ActivationPolicy::Accessory);
-                        if let Err(e) = res {
-                            log::error!("Failed to set activation policy: {}", e);
+                    Ok(()) => {
+                        let _res = window.hide();
+
+                        #[cfg(target_os = "macos")]
+                        {
+                            let settings = get_settings(window.app_handle());
+                            let tray_visible = settings.show_tray_icon
+                                && !window.app_handle().state::<CliArgs>().no_tray;
+                            if tray_visible {
+                                // Tray is available: hide the dock icon, app lives in the tray
+                                let res = window
+                                    .app_handle()
+                                    .set_activation_policy(tauri::ActivationPolicy::Accessory);
+                                if let Err(e) = res {
+                                    log::error!("Failed to set activation policy: {}", e);
+                                }
+                            }
+                            // No tray: keep the dock icon visible so the user can reopen
                         }
                     }
-                    // No tray: keep the dock icon visible so the user can reopen
+                    Err(error) => {
+                        log::warn!(
+                            "Failed to restore shortcuts before hiding window; keeping settings visible: {}",
+                            error
+                        );
+                    }
                 }
             }
             tauri::WindowEvent::ThemeChanged(theme) => {

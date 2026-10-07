@@ -16,7 +16,8 @@
     "postProcessing": "后处理",
     "history": "历史记录",
     "debug": "调试",
-    "about": "关于"
+    "about": "关于",
+    "presets": null
   },
   "onboarding": {
     "subtitle": "请选择一个转录模型以开始使用",
@@ -463,6 +464,42 @@
         "createFirst": "点击上方的「创建新提示词」来创建您的第一个后处理提示词。"
       }
     },
+    "presets": {
+      "title": null,
+      "description": null,
+      "useCurrentModel": null,
+      "enabled": null,
+      "enabledDescription": null,
+      "name": null,
+      "nameDescription": null,
+      "model": null,
+      "modelDescription": null,
+      "language": null,
+      "languageDescription": null,
+      "translateEnglish": null,
+      "translateEnglishDescription": null,
+      "translateUnavailable": null,
+      "postProcess": null,
+      "postProcessDescription": null,
+      "prompt": null,
+      "promptDescription": null,
+      "choosePrompt": null,
+      "promptRequired": null,
+      "saveFailed": null,
+      "createFailed": null,
+      "deleteFailed": null,
+      "addPreset": null,
+      "addShortcut": null,
+      "shortcutRequired": null,
+      "shortcutDescription": null,
+      "emptyTitle": null,
+      "emptyDescription": null,
+      "limitReached": null,
+      "deletePreset": null,
+      "deleteDescription": null,
+      "deleteConfirm": null,
+      "postProcessGlobalDisabled": null
+    },
     "history": {
       "title": "历史记录",
       "openFolder": "打开录音文件夹",
@@ -477,7 +514,8 @@
       "retranscribe": "重新转录",
       "retranscribeError": "重新转录失败。请重试。",
       "transcribing": "转录中...",
-      "transcriptionFailed": "转录失败。您可以使用重试图标重新转录。"
+      "transcriptionFailed": "转录失败。您可以使用重试图标重新转录。",
+      "retranscribeCurrentSettings": null
     },
     "debug": {
       "title": "调试",
@@ -669,6 +707,7 @@
     "open": "打开",
     "copy": "复制",
     "clear": "清除",
+    "retry": null,
     "noOptionsFound": "未找到选项"
   },
   "accessibility": {
@@ -676,6 +715,7 @@
     "openSettings": "打开系统设置"
   },
   "errors": {
+    "shortcutInitializationFailed": null,
     "loadDirectory": "加载目录时出错: {{error}}",
     "micPermissionDeniedTitle": "麦克风访问被拒绝",
     "micPermissionDenied": {

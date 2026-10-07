@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 import { listen } from "@tauri-apps/api/event";
 import { formatKeyCombination } from "../../lib/utils/keyboard";
 import { ResetButton } from "../ui/ResetButton";
+import { Button } from "../ui/Button";
 import { SettingContainer } from "../ui/SettingContainer";
 import { useSettings } from "../../hooks/useSettings";
 import { useOsType } from "../../hooks/useOsType";
@@ -16,6 +17,9 @@ interface HandyKeysShortcutInputProps {
   grouped?: boolean;
   shortcutId: string;
   disabled?: boolean;
+  allowCreate?: boolean;
+  title?: string;
+  description?: string;
 }
 
 interface HandyKeysEvent {
@@ -30,6 +34,9 @@ export const HandyKeysShortcutInput: React.FC<HandyKeysShortcutInputProps> = ({
   grouped = false,
   shortcutId,
   disabled = false,
+  allowCreate = false,
+  title,
+  description,
 }) => {
   const { t } = useTranslation();
   const { getSetting, updateBinding, resetBinding, isUpdating, isLoading } =
@@ -52,6 +59,54 @@ export const HandyKeysShortcutInput: React.FC<HandyKeysShortcutInputProps> = ({
 
   const bindings = getSetting("bindings") || {};
 
+  // Closing the native window hides it without unmounting React. The backend
+  // stops capture/restores shortcuts first; clear local recording state when
+  // that cancellation event arrives so hidden global capture cannot continue.
+  useEffect(() => {
+    let active = true;
+    let unlistenClose: (() => void) | null = null;
+    let unlistenFailed: (() => void) | null = null;
+
+    listen("shortcut-capture-cancelled", () => {
+      if (unlistenRef.current) {
+        unlistenRef.current();
+        unlistenRef.current = null;
+      }
+      setIsRecording(false);
+      setCurrentKeys("");
+      currentKeysRef.current = "";
+      keyedShortcutRef.current = "";
+      modifierOnlyShortcutRef.current = "";
+      setOriginalBinding("");
+    }).then((stopListening) => {
+      if (active) {
+        unlistenClose = stopListening;
+      } else {
+        stopListening();
+      }
+    });
+
+    listen<string>("shortcut-capture-cancel-failed", (event) => {
+      console.error(
+        "Failed to restore shortcuts before hiding Settings:",
+        event.payload,
+      );
+      toast.error(t("settings.general.shortcut.errors.restore"));
+    }).then((stopListening) => {
+      if (active) {
+        unlistenFailed = stopListening;
+      } else {
+        stopListening();
+      }
+    });
+
+    return () => {
+      active = false;
+      unlistenClose?.();
+      unlistenFailed?.();
+    };
+  }, [t]);
+
   // Handle cancellation
   const cancelRecording = useCallback(async () => {
     if (!isRecording) return;
@@ -62,8 +117,17 @@ export const HandyKeysShortcutInput: React.FC<HandyKeysShortcutInputProps> = ({
       unlistenRef.current = null;
     }
 
-    // Stop backend recording
-    await commands.stopHandyKeysRecording().catch(console.error);
+    // Stop backend recording and surface any shortcut-restoration failure.
+    try {
+      const stopResult = await commands.stopHandyKeysRecording();
+      if (stopResult.status === "error") {
+        console.error("Failed to stop shortcut recording:", stopResult.error);
+        toast.error(t("settings.general.shortcut.errors.restore"));
+      }
+    } catch (error) {
+      console.error("Failed to stop shortcut recording:", error);
+      toast.error(t("settings.general.shortcut.errors.restore"));
+    }
 
     // Restore original binding
     if (originalBinding) {
@@ -118,7 +182,16 @@ export const HandyKeysShortcutInput: React.FC<HandyKeysShortcutInputProps> = ({
           unlistenRef.current();
           unlistenRef.current = null;
         }
-        await commands.stopHandyKeysRecording().catch(console.error);
+        try {
+          const stopResult = await commands.stopHandyKeysRecording();
+          if (stopResult.status === "error") {
+            console.error("Failed to restore shortcuts:", stopResult.error);
+            toast.error(t("settings.general.shortcut.errors.restore"));
+          }
+        } catch (error) {
+          console.error("Failed to stop shortcut recording:", error);
+          toast.error(t("settings.general.shortcut.errors.restore"));
+        }
         setIsRecording(false);
         setCurrentKeys("");
         currentKeysRef.current = "";
@@ -260,8 +333,8 @@ export const HandyKeysShortcutInput: React.FC<HandyKeysShortcutInputProps> = ({
   if (isLoading) {
     return (
       <SettingContainer
-        title={t("settings.general.shortcut.title")}
-        description={t("settings.general.shortcut.description")}
+        title={title ?? t("settings.general.shortcut.title")}
+        description={description ?? t("settings.general.shortcut.description")}
         descriptionMode={descriptionMode}
         grouped={grouped}
       >
@@ -276,8 +349,8 @@ export const HandyKeysShortcutInput: React.FC<HandyKeysShortcutInputProps> = ({
   if (Object.keys(bindings).length === 0) {
     return (
       <SettingContainer
-        title={t("settings.general.shortcut.title")}
-        description={t("settings.general.shortcut.description")}
+        title={title ?? t("settings.general.shortcut.title")}
+        description={description ?? t("settings.general.shortcut.description")}
         descriptionMode={descriptionMode}
         grouped={grouped}
       >
@@ -289,11 +362,40 @@ export const HandyKeysShortcutInput: React.FC<HandyKeysShortcutInputProps> = ({
   }
 
   const binding = bindings[shortcutId];
+  if (!binding && allowCreate) {
+    return (
+      <SettingContainer
+        title={title ?? t("settings.general.shortcut.title")}
+        description={description ?? t("settings.presets.shortcutRequired")}
+        descriptionMode={descriptionMode}
+        grouped={grouped}
+        disabled={disabled}
+      >
+        {isRecording ? (
+          <div
+            ref={shortcutRef}
+            className="px-2 py-1 text-sm font-semibold border border-logo-primary bg-logo-primary/30 rounded-md"
+          >
+            {formatCurrentKeys()}
+          </div>
+        ) : (
+          <Button
+            size="sm"
+            variant="secondary"
+            onClick={startRecording}
+            disabled={disabled}
+          >
+            {t("settings.presets.addShortcut")}
+          </Button>
+        )}
+      </SettingContainer>
+    );
+  }
   if (!binding) {
     return (
       <SettingContainer
-        title={t("settings.general.shortcut.title")}
-        description={t("settings.general.shortcut.notFound")}
+        title={title ?? t("settings.general.shortcut.title")}
+        description={description ?? t("settings.general.shortcut.notFound")}
         descriptionMode={descriptionMode}
         grouped={grouped}
       >
@@ -305,14 +407,15 @@ export const HandyKeysShortcutInput: React.FC<HandyKeysShortcutInputProps> = ({
   }
 
   // Get translated name and description for the binding
-  const translatedName = t(
-    `settings.general.shortcut.bindings.${shortcutId}.name`,
-    binding.name,
-  );
-  const translatedDescription = t(
-    `settings.general.shortcut.bindings.${shortcutId}.description`,
-    binding.description,
-  );
+  const translatedName =
+    title ??
+    t(`settings.general.shortcut.bindings.${shortcutId}.name`, binding.name);
+  const translatedDescription =
+    description ??
+    t(
+      `settings.general.shortcut.bindings.${shortcutId}.description`,
+      binding.description,
+    );
 
   return (
     <SettingContainer

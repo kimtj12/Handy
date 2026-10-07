@@ -16,7 +16,8 @@
     "postProcessing": "Постобработка",
     "history": "История",
     "debug": "Отстраняване",
-    "about": "За приложението"
+    "about": "За приложението",
+    "presets": null
   },
   "onboarding": {
     "subtitle": "За да започнете, изберете модел за транскрипция",
@@ -463,6 +464,42 @@
         "createFirst": "Натиснете „Нова подкана“ по-горе, за да създадете първата си подкана за постобработка."
       }
     },
+    "presets": {
+      "title": null,
+      "description": null,
+      "useCurrentModel": null,
+      "enabled": null,
+      "enabledDescription": null,
+      "name": null,
+      "nameDescription": null,
+      "model": null,
+      "modelDescription": null,
+      "language": null,
+      "languageDescription": null,
+      "translateEnglish": null,
+      "translateEnglishDescription": null,
+      "translateUnavailable": null,
+      "postProcess": null,
+      "postProcessDescription": null,
+      "prompt": null,
+      "promptDescription": null,
+      "choosePrompt": null,
+      "promptRequired": null,
+      "saveFailed": null,
+      "createFailed": null,
+      "deleteFailed": null,
+      "addPreset": null,
+      "addShortcut": null,
+      "shortcutRequired": null,
+      "shortcutDescription": null,
+      "emptyTitle": null,
+      "emptyDescription": null,
+      "limitReached": null,
+      "deletePreset": null,
+      "deleteDescription": null,
+      "deleteConfirm": null,
+      "postProcessGlobalDisabled": null
+    },
     "history": {
       "title": "История",
       "openFolder": "Отваряне на папката с записи",
@@ -477,7 +514,8 @@
       "retranscribe": "Повторна транскрипция",
       "retranscribeError": "Повторната транскрипция не бе успешна. Опитайте отново.",
       "transcribing": "Транскрибиране...",
-      "transcriptionFailed": "Транскрипцията не бе успешна. Можете да опитате отново с иконата за повторен опит."
+      "transcriptionFailed": "Транскрипцията не бе успешна. Можете да опитате отново с иконата за повторен опит.",
+      "retranscribeCurrentSettings": null
     },
     "debug": {
       "title": "Отстраняване",
@@ -669,6 +707,7 @@
     "open": "Отваряне",
     "copy": "Копиране",
     "clear": "Изчистване",
+    "retry": null,
     "noOptionsFound": "Няма намерени опции"
   },
   "accessibility": {
@@ -676,6 +715,7 @@
     "openSettings": "Отваряне на системните настройки"
   },
   "errors": {
+    "shortcutInitializationFailed": null,
     "loadDirectory": "Грешка при зареждане на папката: {{error}}",
     "micPermissionDeniedTitle": "Достъпът до микрофона е отказан",
     "micPermissionDenied": {
