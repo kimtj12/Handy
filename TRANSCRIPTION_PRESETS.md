@@ -17,10 +17,10 @@ Build an Apple Silicon app locally (CMake, Rust, Bun, and Xcode command-line too
 
 ```bash
 bun install
-CMAKE_POLICY_VERSION_MINIMUM=3.5 bun run tauri build --bundles app --config '{"bundle":{"createUpdaterArtifacts":false}}'
+CMAKE_POLICY_VERSION_MINIMUM=3.5 bun run tauri build --bundles app --config src-tauri/tauri.presets.conf.json
 ```
 
-The resulting app is `src-tauri/target/release/bundle/macos/Handy.app`. It is ad-hoc signed for personal use, not notarized for distribution. macOS may require granting Accessibility access to this build.
+The resulting app is `src-tauri/target/release/bundle/macos/Handy Presets.app`. The separate name and bundle identifier (`com.kimtj.handy.presets`) keep its macOS permissions and settings separate from the official app. It is ad-hoc signed for personal use, not notarized for distribution. macOS may require granting Accessibility access to this build.
 
 ## What a preset stores
 
